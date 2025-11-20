@@ -199,24 +199,42 @@ function m.auto_install_children(bufnr, filetype, tree)
   if not tree then return end
 
   local function process_injections()
-    -- HACK: Nothing exposes the injections table?..grab it directly.
-    ---@diagnostic disable-next-line: invisible
-    vim.iter(ipairs(tree._injection_query and tree._injection_query._processed_patterns or {}))
-      :map(function (_, injection) return injection.directives[1] end)
-      :filter(function (directive) return directive[1] == "set!" and directive[2] == "injection.language" end)
-      :map(function (directive) return directive[3] end)
-      :filter(function (lang) return m.cache.attempt[lang] == nil end)
-      :each(function (lang) M.auto_install(bufnr, filetype, lang) end)
+    ---@param t vim.treesitter.LanguageTree
+    local function _process_injections(t)
+      -- HACK: Nothing exposes the injections table?..grab it directly.
+      ---@diagnostic disable-next-line: invisible
+      vim.iter(t._injection_query and t._injection_query._processed_patterns or {})
+        ---@param i vim.treesitter.query.ProcessedPattern
+        :map(function (i) return i.directives[1] end)
+        ---@param d table<string|integer>
+        :filter(function (d) return d[1] == "set!" and d[2] == "injection.language" end)
+        ---@param d table<string|integer>
+        :map(function (d) return d[3] end)
+        ---@param l string|integer
+        :filter(function (l) return type(l) == "string" and m.cache.attempt[l] == nil end)
+        ---@param l string
+        :each(function (l) M.auto_install(bufnr, filetype, l) end)
+    end
+
+    -- Parse tree and all its children, recursively.
+    ---@type table<vim.treesitter.LanguageTree>
+    local trees = { tree }
+    while #trees > 0 do
+      ---@type vim.treesitter.LanguageTree
+      local t = table.remove(trees, 1)
+      _process_injections(t)
+      vim.iter(t:children())
+        ---@param l string
+        :filter(function (l) return m.cache.attempt[l] == nil end)
+        ---@param c vim.treesitter.LanguageTree
+        :each(function (_, c) table.insert(trees, c) end)
+    end
   end
 
+  tree:register_cbs({ on_child_added = function (t)
+    vim.iter(t:children()):each(function (c) M.auto_install_children(bufnr, filetype, c) end)
+  end }, true)
   process_injections()
-  tree:register_cbs({
-    on_changedtree = process_injections,
-    ---@param t vim.treesitter.LanguageTree
-    on_child_added = function (t)
-      for _, child in pairs(t:children()) do M.auto_install_children(bufnr, filetype, child) end
-    end,
-  }, true)
 end
 
 ---@param opts? ts_auto_install.Opts
